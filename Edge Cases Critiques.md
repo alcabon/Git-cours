@@ -795,4 +795,550 @@ C'est le pattern qui transforme les LLMs de "générateurs de contenu" à "boots
 
 Très clever. C'est exactement ce que Sonnet/Haiku sont bons à faire. 🎯
 
-[View your documents](computer:///mnt/user-data/outputs/)
+---
+
+# Point Critique : Pragmatisme vs Magie des LLMs
+
+Vous soulevez un **warning extrêmement important** que beaucoup ignorent. C'est l'observation d'une vraie maturité technique.
+
+## Les Vrais Cas Où LLMs Aident (Pas de Magie)
+
+### Case 1: Edge Cases Détectés en Runtime
+
+```
+Scenario: Vous reversez Account.Status field
+Dependency graph says: "Safe, no blockers"
+BUT: Unknown Apex code somewhere dynamique
+
+LLM role: NOT predict (peut pas), BUT detect
+
+def detect_runtime_anomaly(deploy_result):
+    """
+    Deploy failed ou comportement étrange
+    Log: "Reference to missing field Account.Status__c"
+    
+    LLM analyzes:
+      - Error logs
+      - Nearby code
+      - Recent changes
+      → "This Apex class references Account.Status dynamically"
+      
+    Action: Alert + add to dependency graph for next time
+    """
+```
+
+**LLM is post-hoc detective, NOT pre-hoc predictor**
+
+### Case 2: Complex Dependency Chain Decision
+
+```
+Scenario: Vous voulez revert Feature B
+Dependency graph complex:
+  B → C → D → E (linear chain)
+  B → F → G (parallel)
+  B → C → F (diamond)
+  + 20 more edges
+
+Question: "Can we safely revert just B?"
+
+Algorithme:
+  ├─ Topological sort (simple)
+  ├─ Find all dependents (simple)
+  ├─ Calculate impact scope (simple)
+  └─ **Decide if safe**: complex heuristic
+
+LLM can help:
+  ```python
+  def decide_rollback_safety(artifact, dependency_graph):
+      """
+      Simple algo: direct dependents
+      Complex reasoning: LLM validates the decision
+      """
+      
+      direct_deps = graph.get_all_dependents(artifact)
+      
+      # This is where LLM helps
+      reasoning = llm_analyze(f"""
+        {artifact} has these dependents:
+        {json.dumps(direct_deps)}
+        
+        Can we safely revert ONLY {artifact}?
+        Consider:
+        - Do all dependents have fallbacks?
+        - Are there circular dependencies?
+        - Any data consistency issues?
+        
+        Return: SAFE / RISKY / MANUAL_REVIEW
+      """)
+      
+      return reasoning
+  ```
+```
+
+**BUT**: Must have unit tests for every LLM decision!
+
+---
+
+## Les Pièges : Ce Que LLMs Font MAL
+
+### Piège 1: Algorithmes Complexes
+
+```
+❌ Don't do this:
+  prompt = """
+    I have a complex dependency graph with cycles.
+    Using advanced graph theory, find the optimal
+    rollback order that minimizes blast radius.
+  """
+  
+  LLM: Hallucinates a "perfect solution"
+       But can miss edge cases
+       No guarantee of correctness
+
+✅ Do this instead:
+  Use proven algorithm:
+    def find_rollback_order(artifact_to_revert, graph):
+        # Tarjan's algorithm for SCC (strongly connected components)
+        # Proven, deterministic, well-tested
+        sccs = find_strongly_connected_components(graph)
+        
+        # Topological sort
+        topo_order = topological_sort(graph)
+        
+        return reversed(topo_order)
+```
+
+**LLMs are bad at guaranteeing algorithmic correctness.**
+
+### Piège 2: Hallucinated Patterns
+
+```
+❌ Don't do this:
+  prompt = """
+    Analyze these 3 Apex classes.
+    What patterns do you see for field references?
+  """
+  
+  LLM: "I notice classes use _c suffix for custom fields"
+       "And they often wrap updates in try-catch"
+       "Maybe all fields with _c need special handling?"
+  
+  You: Trust this pattern, implement special logic
+  
+  Reality: LLM saw 3 examples, generalized incorrectly
+           Your logic breaks on real data
+
+✅ Do this instead:
+  Test the pattern against 1000s of real artifacts
+  Only then codify it
+```
+
+**LLMs are pattern generators, not pattern validators.**
+
+### Piège 3: Non-Deterministic Results
+
+```
+❌ Don't do this:
+  For each rollback decision:
+    Call LLM
+    → Sometimes says "SAFE"
+    → Sometimes says "RISKY"
+    → Different answer on same input
+    
+  Result: Production behaves randomly
+
+✅ Do this instead:
+  LLM helps ONCE to generate rules
+  Rules are deterministic forever after
+  
+  If LLM output needed at runtime:
+    Cache it
+    Return cached decision
+    Only regenerate if input changes materially
+```
+
+**LLMs are non-deterministic by default.**
+
+---
+
+## Stratégie Pragmatique : "Verify Before Trust"
+
+### Architecture Réaliste
+
+```
+┌─ Parsing (Deterministic)
+│  ├─ Haiku analyzes schema ONCE
+│  ├─ Generate Python parser
+│  └─ Parser is 100% deterministic
+│
+├─ Dependency Detection (Mixed)
+│  ├─ Salesforce API (reliable, incomplete)
+│  ├─ Static analysis (deterministic)
+│  └─ LLM analysis (optional, confidence-scored)
+│
+└─ Rollback Decision (Conservative)
+   ├─ Simple algo: graph traversal
+   ├─ LLM: VALIDATES the algo (not replaces it)
+   └─ Human approval if confidence < threshold
+```
+
+### Implementation Template
+
+```python
+class RollbackDecisionMaker:
+    def __init__(self):
+        self.graph = load_dependency_graph()
+        self.cache = {}  # Cache LLM decisions
+    
+    def decide_rollback(self, artifact):
+        """
+        Multi-layer decision making
+        """
+        
+        # Layer 1: Deterministic analysis
+        direct_deps = self.graph.get_all_dependents(artifact)
+        cascading_impact = len(self.graph.get_recursive_dependents(artifact))
+        
+        # Layer 2: Simple heuristic (no LLM)
+        if cascading_impact > THRESHOLD:
+            return "REJECT_AUTO", "Too many dependents"
+        
+        if cascading_impact < SMALL_THRESHOLD:
+            return "SAFE_ROLLBACK", "Isolated change"
+        
+        # Layer 3: ONLY if ambiguous, use LLM for validation
+        if SMALL_THRESHOLD <= cascading_impact <= THRESHOLD:
+            
+            # Check cache first
+            cache_key = f"{artifact}:{cascading_impact}"
+            if cache_key in self.cache:
+                return self.cache[cache_key]
+            
+            # LLM validates, doesn't decide
+            validation = self._validate_with_llm(
+                artifact, 
+                direct_deps,
+                cascading_impact
+            )
+            
+            decision = (
+                "STAGING_ONLY" if validation['risky_factors'] else "SAFE_ROLLBACK",
+                validation['reasoning']
+            )
+            
+            # Cache for determinism
+            self.cache[cache_key] = decision
+            return decision
+    
+    def _validate_with_llm(self, artifact, deps, impact):
+        """
+        LLM VALIDATES the decision, not makes it
+        """
+        
+        prompt = f"""
+        Rollback Analysis (VALIDATION ONLY, not decision-making):
+        
+        Artifact: {artifact}
+        Direct dependents: {len(deps)}
+        Total cascading impact: {impact} artifacts
+        
+        QUESTION: Are there any non-obvious risks?
+        
+        Consider:
+        - Data consistency issues
+        - Async processes that might break
+        - Standard field dependencies (if applicable)
+        - Circular dependency risks
+        
+        Return JSON:
+        {{
+          "risky_factors": [
+            "List any specific concerns",
+            "Or empty if looks safe"
+          ],
+          "confidence": 0.85,
+          "reasoning": "Brief explanation"
+        }}
+        """
+        
+        response = claude_sonnet.generate(prompt)
+        return json.loads(response)
+    
+    def test_decision_consistency(self):
+        """
+        CRITICAL: Verify LLM decisions are repeatable
+        """
+        
+        test_artifacts = [
+            "Account.Status__c",
+            "Flow.RefreshStatus",
+            "ValidationRule.StatusCheck"
+        ]
+        
+        for artifact in test_artifacts:
+            result1 = self.decide_rollback(artifact)
+            result2 = self.decide_rollback(artifact)
+            
+            if result1 != result2:
+                raise AssertionError(
+                    f"Non-deterministic decision for {artifact}:\n"
+                    f"  First: {result1}\n"
+                    f"  Second: {result2}"
+                )
+        
+        print("✅ All decisions deterministic")
+```
+
+---
+
+## Cas Réels : Quand LLM Aide, Quand ça Échoue
+
+### Scenario 1: Successful LLM Help (Boundary Case)
+
+```
+Metadata: Custom field with complex formula
+Formula: IF(OR(Status__c = 'Active', Account.RecordType.Name = 'Enterprise'), ...)
+
+Problem: Dependency analysis missed Account.RecordType reference
+
+LLM help:
+  ```
+  Analyze formula: IF(OR(Status__c = 'Active', Account.RecordType.Name = 'Enterprise'), ...)
+  Extract field references:
+  - Status__c (custom field)
+  - Account (object)
+  - RecordType (standard object)
+  - Name (standard field)
+  ```
+  
+  Result: ✅ Found Account.RecordType dependency
+          Algorithm: String regex parsing
+          Confidence: Pattern-matched successfully
+
+✅ This is good LLM use:
+   - Limited scope (just this formula)
+   - Verifiable result (extract = testable)
+   - Testable against 100s of formulas
+   - Fallback: Just mark formula as "unknown deps"
+```
+
+### Scenario 2: Failed LLM Help (Bad Use)
+
+```
+Metadata: Complex Apex class with dynamic instantiation
+
+Code snippet:
+  Map<String, Type> typeMap = new Map<String, Type>{
+    'StatusUpdater' => Type.forName('AccountHelper.StatusUpdater'),
+    'PriorityHandler' => Type.forName('AccountHelper.PriorityHandler'),
+    ...
+  };
+
+Problem: Can't detect which classes are instantiated
+
+LLM help attempt:
+  ```
+  Analyze this Apex code for dependencies:
+  - Uses Type.forName() for dynamic instantiation
+  - References AccountHelper.StatusUpdater
+  - References AccountHelper.PriorityHandler
+  ```
+  
+  LLM confident output:
+    "Apex depends on AccountHelper.StatusUpdater"
+    "And AccountHelper.PriorityHandler"
+  
+  But reality:
+    - Map could be populated at runtime from config
+    - Not all values might be used
+    - forName() might fail, caught exception
+    - Dependencies are truly unknowable
+
+❌ LLM hallucinated certainty where uncertainty exists
+```
+
+---
+
+## Règles d'Or : Quand Faire Confiance aux LLMs
+
+### ✅ Trust LLM for:
+
+```
+1. Parsing structured data (XML, JSON, code)
+   → Pattern recognition is their strength
+   → But validate output against schema
+   
+2. Extracting information from text
+   → Formulas, comments, variable names
+   → But verify with regex after
+   
+3. Analyzing code patterns
+   → Finding common idioms
+   → But don't trust for correctness guarantees
+   
+4. Generating test cases
+   → Thinking of edge cases
+   → But manually validate tests pass
+   
+5. Summarizing complex logic
+   → "What does this flow do?"
+   → But don't use summary for routing decisions
+```
+
+### ❌ Don't Trust LLM for:
+
+```
+1. Algorithmic correctness
+   → "Find optimal solution to X problem"
+   → Likely hallucinated
+   
+2. Predicting runtime behavior
+   → "What will happen when we delete this?"
+   → Guessing, not knowledge
+   
+3. Guaranteeing no side effects
+   → "Is this change safe?"
+   → Can't prove negative
+   
+4. New patterns they "discovered"
+   → "I noticed all Status fields follow pattern X"
+   → Generalization from small sample
+   
+5. Non-deterministic decisions
+   → Same input should = same output
+   → LLMs don't guarantee this
+```
+
+---
+
+## Votre Approche Finale (Recommandée)
+
+### Phase 1: Parser (Use LLM, Then Lock It)
+
+```python
+# Week 1: LLM generates parser
+haiku_schema = haiku_analyze_schemas()
+parser = generate_parser(haiku_schema)
+
+# Week 2: EXHAUSTIVE testing
+test_parser_against_10000_artifacts()
+
+# Week 3+: Parser is LOCKED
+# No more LLM calls for parsing
+# Parser is pure Python, deterministic
+```
+
+### Phase 2: Dependency (Use LLM, Cache Results)
+
+```python
+# Week 3: LLM analyzes dependencies
+sonnet_graph = sonnet_analyze_dependencies()
+
+# Week 4: VALIDATE every edge
+# - Test against known dependencies
+# - Cross-reference with code
+# - Verify no hallucinations
+
+# Week 5+: Graph is CACHED
+# Update only when new metadata appears
+# LLM results are deterministic via caching
+```
+
+### Phase 3: Rollback Decision (Use Algorithm, LLM Validates)
+
+```python
+# Deterministic algorithm decides
+algorithm_result = graph_algorithm(artifact)
+
+# LLM VALIDATES (optional layer)
+if ambiguous(algorithm_result):
+    validation = sonnet_validate(algorithm_result)
+    
+# Cache validation
+# Ensure determinism
+# Human approval for edge cases
+```
+
+---
+
+## Testing Strategy (Critical)
+
+```python
+def comprehensive_test_suite():
+    """
+    Don't ship until these pass
+    """
+    
+    # Test 1: Parser determinism
+    for artifact in sample_artifacts:
+        result1 = parser.normalize(artifact)
+        result2 = parser.normalize(artifact)
+        assert result1 == result2
+    
+    # Test 2: Dependency accuracy
+    # Compare LLM findings against manual audit
+    for artifact in known_dependencies:
+        detected = dependency_graph.get_dependents(artifact)
+        expected = manual_audit[artifact]
+        
+        if detected != expected:
+            print(f"⚠️ Mismatch for {artifact}")
+            # Manually review, update if needed
+    
+    # Test 3: Rollback non-regression
+    for test_case in rollback_test_cases:
+        decision = rollback_decider.decide(test_case['artifact'])
+        expected = test_case['expected_decision']
+        
+        assert decision == expected
+    
+    # Test 4: Cache consistency
+    for artifact in test_artifacts:
+        result1 = rollback_decider.decide(artifact)
+        result2 = rollback_decider.decide(artifact)  # Should use cache
+        
+        assert result1 == result2, "Cache not working"
+    
+    print("✅ All safety tests passed")
+```
+
+---
+
+## Summary : Votre Warning Est Correct
+
+```
+❌ Don't: "LLMs will magically solve rollback edge cases"
+
+✅ Do: "Use LLMs for what they're good at:
+        - Understanding structure
+        - Extracting information
+        - Pattern matching
+        
+        Then LOCK those results.
+        
+        For runtime edge cases:
+        - Use deterministic algorithms
+        - Test exhaustively
+        - Have manual fallback"
+```
+
+**Votre intuition est parfaite** :
+
+```
+LLMs sont excellents pour:
+  ✅ Analysis initiale (parsing, schema learning)
+  ✅ Understanding structure (XML, code)
+  ✅ Generating rules/patterns
+
+LLMs sont dangereux pour:
+  ❌ Runtime decisions sans validation
+  ❌ Algorithmes avec garanties (correctness)
+  ❌ Confiance aveugle aux "découvertes"
+  
+Solution:
+  Use LLM to bootstrap
+  Then validate, test, lock
+  Runtime is deterministic, no LLM calls
+```
+
+C'est l'approche **mature et pragmatique** pour production. 🎯
