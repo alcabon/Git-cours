@@ -404,3 +404,246 @@ Edge cases Gearset doit gérer:
 ```
 
 C'est pour ça que c'est complexe. Et c'est exactement ce qui justifie d'avoir une **tool spécialisée** vs juste Git. 🎯
+
+---
+
+# MetadataComponentDependency : Le Talon d'Achille Réel
+
+Excellente find ! Ça change **complètement** ma théorie précédente. C'est en fait **la vraie contrainte** que Gearset doit naviguer.Oh wow. Ça change **complètement** ma théorie précédente. C'est en fait **pire** que je pensais.
+
+## Les Vraies Limitations
+
+L'API Dependency est limitée à 2000 records par query, ce qui signifie que sur les gros orgs, le graphe de dépendances est **incomplet par design**. Et même avec Bulk API 2.0, c'est limité à 10,000 records.
+
+### Gap Critique 1 : Métadonnées Standard
+
+Les champs standard et les objets standard ne sont **pas supportés** par MetadataComponentDependency. Vous ne pouvez pas interroger les dépendances sur les champs standard comme Account.Name.
+
+```
+Problem: 
+  Feature crée Layout qui utilise champ standard Account.Name
+  Gearset query: "Qui dépend de Account.Name ?"
+  API response: "Not supported"
+  
+Result:
+  ✅ Gearset voit layout → apex
+  ❌ Gearset NE VOIT PAS layout → Account.Name
+  = Graphe incomplet, rollback dangereux
+```
+
+### Gap Critique 2 : Types de Metadata Limités
+
+Seuls certains types de metadata sont supportés : ApexClass, ApexComponent, ApexPage, ApexTrigger, AuraDefinitionBundle, CustomObject, CustomField, CustomTab, CustomPermission, CustomApplication. Les Reports ne sont pas inclus dans les queries MetadataComponentDependency.
+
+```
+Flow crée un Report basé sur Custom Object
+  ├─ MetadataComponentDependency voit: Flow → CustomObject ✅
+  └─ MetadataComponentDependency NE voit PAS: Report (pas supporté) ❌
+```
+
+### Gap Critique 3 : Code Dynamique Invisible
+
+```
+ApexClass contient:
+  Type t = Type.forName(dynamicClassName);
+  // ou
+  String fieldName = 'Status__c';
+  sobject.put(fieldName, value);
+
+MetadataComponentDependency:
+  "What does this class depend on ?"
+  
+API Response:
+  "Nothing detected"
+  
+Reality:
+  ❌ Classe dépend dynamiquement de n'importe quel champ/classe
+  ❌ Pas détectable via statique parsing
+```
+
+### Gap Critique 4 : Formules et Configurations
+
+```
+Validation Rule: IF(Status__c = 'Active', ...)
+  ├─ XML: <criteria>
+           <criteriaString>Status__c = 'Active'</criteriaString>
+  └─ MetadataComponentDependency parse ça ?
+     = Uncertain, probablement pas avec tous les patterns complexes
+```
+
+### Gap Critique 5 : Requêtes SOQL Limitées
+
+MetadataComponentDependency ne supporte pas GROUP BY, LIMIT, OFFSET, OR, NOT. Les opérations non supportées retournent des erreurs ou résultats incorrects.
+
+```
+Query complexe que Gearset voudrait faire:
+  SELECT ... FROM MetadataComponentDependency
+  WHERE (Type1 = 'Flow' OR Type1 = 'Process')
+  AND (Type2 = 'CustomField' OR Type2 = 'CustomObject')
+  ORDER BY Created DESC
+  LIMIT 1000 OFFSET 2000
+  
+Résultat: ERROR
+Workaround: Faire 10+ queries individuelles, recombiner manuellement
+```
+
+---
+
+## Implications pour Gearset : Le Pragmatisme Forcé
+
+Avec ces limitations, Gearset **ne peut pas construire un graphe fiable**. Donc voici ce qu'ils font probablement :
+
+### Strategy 1 : Confiance Partielle + Warnings
+
+```
+Revert request: "Remove Feature B (Layout_Y)"
+
+Gearset algorithm:
+  1. Query MetadataComponentDependency
+  2. Get: Field_X ← Layout_Y ← Flow_Z (via API)
+  3. Check: "Peut-on revert Layout_Y ?"
+  
+  BUT:
+    ├─ Account.Name not trackable (standard field)
+    ├─ Report dependencies invisible (not supported)
+    ├─ Dynamic code in Apex undetectable
+    ├─ Formula complexity unparseable
+    └─ 2000 record limit might have cut off some deps
+    
+  Output to Human:
+    "Can revert Layout_Y + Flow_Z"
+    ⚠️ WARNING:
+      - Standard field dependencies: NOT TRACKED
+      - Dynamic code references: POSSIBLE
+      - Formula references: UNCERTAIN
+      - Check validation rules manually
+```
+
+### Strategy 2 : Default to Conservative
+
+```
+Auto-revert triggered in staging
+
+Gearset: "Layout_Y causes regression"
+
+Decision tree:
+  IF confidence_level < 80%:
+    → Don't auto-revert
+    → Suggest human review
+    → Explain why uncertain
+    
+  IF confidence_level < 60%:
+    → Reject auto-revert entirely
+    → Recommend full rollback instead
+```
+
+### Strategy 3 : Augment API Data
+
+```
+Gearset probably also does:
+  ├─ Parse XML directly (validation rules, formulas)
+  ├─ Parse Apex code (simple pattern matching for references)
+  ├─ Cache dependency graph locally (not queried every time)
+  ├─ Track historical deployments (build graph incrementally)
+  ├─ Crowdsource issues ("we failed to detect X before")
+  └─ Fallback to "safer" rollback strategy if uncertain
+```
+
+---
+
+## Ce Que Ça Signifie Pour Vos Edge Cases
+
+Les edge cases que j'ai listés plus tôt ? Beaucoup **ne peuvent pas être détectés fiablement**.
+
+```
+Edge Case 1: Chaîne de dépendances
+  ✅ Partiellement détectable (si tous les types supportés)
+  ❌ Risque de gaps (standard fields, etc)
+
+Edge Case 2: Modifications partagées
+  ⚠️ Très difficile (besoin de diff entre commits)
+  ❌ MetadataComponentDependency ne fait que state actuel
+
+Edge Case 3: Cycles
+  ⚠️ Détectable en théorie
+  ❌ Mais seulement pour les 2000 premiers records
+
+Edge Case 4: Side effects en cascade
+  ❌ Pratiquement impossible
+     (need runtime analysis, not static metadata)
+
+Edge Case 5: État incohérent post-revert
+  ⚠️ Partiellement validable (deploy va fail ou succeed)
+  ❌ Mais beaucoup de faux négatifs possibles
+```
+
+---
+
+## Donc... Gearset Est Moins Magique Qu'on Croyait
+
+```
+Réalité:
+  Gearset: "Voici le graphe de dépendances"
+  Vérité: "C'est un graphe partiel, incomplet, potentiellement faux"
+
+Gearset Strategy:
+  "Nous détectons ce que Salesforce exposes via MetadataComponentDependency.
+   Pour le reste, on est conservateurs et on demande à l'humain."
+```
+
+---
+
+## Les Vraies Implications pour Rollback Auto
+
+```
+Auto-rollback en Staging :
+  ✅ Safe (c'est jetable)
+  ✅ Peut faire des essais
+  
+Auto-rollback en Production :
+  ❌ Risqué
+  ❌ Gearset VRAIMENT ne peut pas être sûr
+  ❌ Ne sait pas ce qu'il ne sait pas
+  
+Manual + rapide Rollback:
+  ✅ Humain valide les dépendances
+  ✅ Gearset déploie juste l'inverse
+  ✅ Gearset aide en donnant ce qu'il SAIT
+```
+
+---
+
+## Verdict : Gearset = "Best Effort + Conservative"
+
+```
+Gearset ne peut PAS être parfait parce que Salesforce expose une API imparfaite.
+
+Ce qu'ils font donc :
+  1. Use MetadataComponentDependency au max (imparfait mais utile)
+  2. Parse XML directly pour compléter (pattern matching)
+  3. Conservative defaults (doute = refuse auto-revert)
+  4. Warnings explicites (standard fields not tracked, etc)
+  5. Fallback to humans (quand trop d'incertitude)
+  6. Suggest full rollback quand risque trop haut
+  
+Valeur réelle de Gearset:
+  "Vous ne POUVEZ pas faire ça fiablement seuls.
+   Nous, on peut au moins le faire MIEUX que rien,
+   et on vous avertit des limites."
+```
+
+---
+
+## Votre Question Était Clairvoyante
+
+> "Comment Gearset gère les dépendances entrecroisées ?"
+
+Réponse honnête :
+
+**Pas très bien. Ils font de leur mieux avec une API Salesforce limitée, conservent une approche prudente, et acceptent les gaps.**
+
+C'est pour ça qu'ils **ne font pas d'auto-rollback magique en prod**. C'est trop risqué avec des données incomplets.
+
+La valeur réelle de Gearset c'est **"identifier rapidement ce que tu peux revenir + déployer juste ça"**, pas **"je sais EXACTEMENT ce qui va casser"**.
+
+Vous aviez raison depuis le début : c'est un **pragmatisme forcé par les limitations de Salesforce**. 🎯
