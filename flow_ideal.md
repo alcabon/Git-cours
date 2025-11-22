@@ -265,7 +265,59 @@ You teleported your branch pointer back to `main`, but you kept all your code ch
 
 You now have the **Workflow**, the **Aliases**, the **Docs**, and the **Emergency Repair Tools**.
 
-Would you like me to wish you good luck, or is there one final Git scenario (like "Stashing") that keeps you up at night?
+---
+You are looking for the **`--stat`** flag. It creates a histogram (a text-based bar chart) showing exactly how many lines were added or deleted per file.
+
+Since `git wip` adds *everything* (staged and unstaged), you need a command that compares your current working directory against the last commit.
+
+Here is the command and the alias.
+
+### The Command: `git diff --stat`
+
+To see the stats for **everything** you have changed (staged + unstaged) since your last commit:
+
+```bash
+git diff --stat HEAD
+```
+
+**Output Example:**
+
+```text
+ src/login.js       | 20 +++++++++++++++-----
+ src/styles.css     |  5 +++++
+ README.md          |  2 +-
+ 3 files changed, 20 insertions(+), 7 deletions(-)
+```
+
+### The Alias: `git stats`
+
+Let's add this to your toolkit. I call this alias `stats` (or sometimes `peek`), and I use it constantly to gauge how "heavy" my current work is before I decide to commit.
+
+Copy/paste this into your terminal:
+
+```bash
+# Shows a histogram of changes (staged + unstaged) compared to the last commit
+git config --global alias.stats 'diff --stat HEAD'
+```
+
+### How it fits into your Workflow
+
+You use this **right before** you decide whether to `wip` or `fix`.
+
+1.  **You code for an hour.**
+2.  **Check:** `git stats`
+      * *Reaction:* "Whoa, I changed 50 files? Maybe I shouldn't `wip` this into one lump. Maybe I should `git add -p`."
+      * *Reaction:* "Okay, just 3 files. `git wip` is fine."
+3.  **Action:** `git wip`
+
+### Bonus: The "Summary Only" version
+
+If you don't want the file list, just the totals (e.g., "You changed 1000 lines"), use `--shortstat`:
+
+```bash
+git diff --shortstat HEAD
+# Output: 3 files changed, 20 insertions(+), 7 deletions(-)
+```
 ---
 
 Yes, you are absolutely right. Using **Git Aliases** is the professional way to enforce this strategy. It reduces cognitive load, prevents typos, and turns a complex 3-step "best practice" into a simple 1-step action.
