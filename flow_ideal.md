@@ -142,8 +142,6 @@ git config --global merge.tool vscode
 git config --global mergetool.vscode.cmd 'code --wait $MERGED'
 ```
 
-```
-
 ### A Next Step for You
 
 Since we have created a complete ecosystem (Workflow + Diagram + Documentation + Aliases), the **best next step** is to apply this to your current project immediately.
