@@ -785,3 +785,19 @@ If you and a colleague are *both* pushing code to `feature/login-fix`, and you r
 To make this seamless, I can provide you with a **`git config` setup** that configures VS Code as your default editor for Git. This way, when a conflict happens, Git creates a nice visual interface in VS Code automatically, rather than making you hunt for `<<<< HEAD` markers manually.
 
 Would you like that configuration command?
+
+---
+
+Here's a breakdown of each tab and what's worth internalizing:
+
+**`git fetch`** — your safest daily habit. Run it constantly. It never touches your files, it only updates your mental model of what the team has done. In a Salesforce project you especially want this before touching any shared metadata (profiles, permission sets, flows) because the diff shows you if a collision is coming.
+
+**`git pull`** — the nuance most teams miss: pull is fine on `main` after a merge (that's a fast-forward, no bubble), but dangerous on a feature branch because it creates the merge commits the whole guide is trying to avoid. Swap it for `git sync` (your `fetch + rebase` alias) on feature branches.
+
+**`fetch vs pull`** — the mental model in the widget sums it up well. Fetch is read-only reconnaissance, pull is reconnaissance that also rearranges your room.
+
+**`git rebase`** — the core insight is that Git replays commits one at a time. This is actually *easier* to resolve than one giant merge: each conflict is scoped to the exact change that introduced it.
+
+**`git push`** — the one thing many devs miss: always use `--force-with-lease` instead of `-f` after a rebase. The `-f` flag is a loaded gun pointed at your teammates' work.
+
+**Extras tab** — `git diff --stat HEAD` (your `git stats` alias) is particularly powerful in Salesforce repos because the Salesforce CLI occasionally silently re-serialises XML files you never touched. Catching that before your PR saves a lot of "why did you change 18 permission set fields?" review comments.
